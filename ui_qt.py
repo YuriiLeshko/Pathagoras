@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPen, QFont
 import sys
+import re
 
 import core
 
@@ -102,26 +103,70 @@ class TriangleCanvas(QFrame):
         # Labels font
         painter.setFont(QFont("Arial", 12))
         painter.setPen(text_color)
+        fm = painter.fontMetrics()
+
+        def clamp(val: int, lo: int, hi: int) -> int:
+            return max(lo, min(val, hi))
+
+        def fmt(name: str, value) -> str:
+            """Build label like 'b = 12.34' or just 'b' if value missing."""
+            if not self.has_result or value is None:
+                return name
+            # Use a compact format; still may be long -> will be elided later
+            return f"{name} = {value:g}"
+
+        def draw_centered_elided_text(x_center: int, y: int, text: str, max_width: int):
+            """
+            Draw elided text (with ellipsis if needed) centered around x_center.
+            """
+            elided = fm.elidedText(text, Qt.ElideRight, max_width)
+            text_w = fm.horizontalAdvance(elided)
+            painter.drawText(x_center - text_w // 2, y, elided)
+
+        def draw_elided_text(x: int, y: int, text: str, max_width: int):
+            """Draw text clipped to max_width using ellipsis if needed."""
+            elided = fm.elidedText(text, Qt.ElideRight, max_width)
+            painter.drawText(x, y, elided)
 
         # Midpoints for labels
         mid_ca = ((point_c[0] + point_a[0]) // 2, (point_c[1] + point_a[1]) // 2)  # bottom leg
         mid_cb = ((point_c[0] + point_b[0]) // 2, (point_c[1] + point_b[1]) // 2)  # left leg
         mid_ba = ((point_b[0] + point_a[0]) // 2, (point_b[1] + point_a[1]) // 2)  # hypotenuse
 
-        # Offsets for nicer placement
-        painter.drawText(mid_cb[0] - 25, mid_cb[1], "a")          # left leg
-        painter.drawText(mid_ca[0], mid_ca[1] + 25, "b")          # bottom leg
-        painter.drawText(mid_ba[0] + 10, mid_ba[1] - 10, "c")     # hypotenuse
+        # b: center the TEXT around the midpoint of the bottom leg
+        b_text = fmt("b", self.result_b)
+        b_y = clamp(mid_ca[1] - 10, margin, h - 5)  # keep inside widget
 
-        # Optional: show numeric values only after computation/verification
-        if self.has_result:
-            painter.setFont(QFont("Arial", 14))
-            painter.setPen(text_color)
+        b_max_left = mid_ca[0] - 5
+        b_max_right = w - 5 - mid_ca[0]
+        b_max_w = max(60, 2 * min(b_max_left, b_max_right))
 
-            # Place numbers near labels
-            painter.drawText(mid_cb[0] - 25, mid_cb[1] + 30, f"{self.result_a:g}")
-            painter.drawText(mid_ca[0] - 15, mid_ca[1] + 75, f"{self.result_b:g}")
-            painter.drawText(mid_ba[0] + 10, mid_ba[1] + 25, f"{self.result_c:g}")
+        draw_centered_elided_text(mid_ca[0], b_y, b_text, max_width=b_max_w)
+
+        # c: use the previous "anchored near the midpoint" approach to avoid overlapping the slanted side
+        c_text = fmt("c", self.result_c)
+        c_x = clamp(mid_ba[0] + 10, 5, w - margin)
+        c_y = clamp(mid_ba[1] - 10, margin, h - 5)
+        draw_elided_text(c_x, c_y, c_text, max_width=w - c_x - 5)
+
+        # a: vertical text along the left leg (better for long values), centered
+        a_text = fmt("a", self.result_a)
+
+        painter.save()
+        a_x = clamp(mid_cb[0] - 25, 5, w - 5)
+        a_y = clamp(mid_cb[1] + 10, margin, h - margin)
+
+        painter.translate(a_x, a_y)
+        painter.rotate(-90)
+
+        max_w_rot = max(60, h - 2 * margin)
+        elided_a = fm.elidedText(a_text, Qt.ElideRight, max_w_rot)
+        a_text_w = fm.horizontalAdvance(elided_a)
+
+        # Center the vertical text around the rotation origin
+        painter.drawText(-a_text_w // 2, 0, elided_a)
+        painter.restore()
+
 
 
 class MainWindow(QWidget):
@@ -177,6 +222,8 @@ class MainWindow(QWidget):
         # --- Status message ---
         self.status_label = QLabel("Enter two values to compute or three to verify")
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setFont(QFont("Arial", 16))
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
         # Action button
@@ -186,6 +233,10 @@ class MainWindow(QWidget):
         input_row.addWidget(self.action_button)
 
         layout.addLayout(input_row)
+
+        # When True, input changes must NOT overwrite the last result message.
+        self._showing_result = False
+
 
     def _normalized_text(self, txt: str) -> str:
         """
@@ -213,65 +264,87 @@ class MainWindow(QWidget):
         - filled == 3 -> enabled, 'Verify'
         - else        -> disabled, '—'
         """
+        if getattr(self, "_showing_result", False):
+            any_text = any((
+                self.a_edit.text().strip(),
+                self.b_edit.text().strip(),
+                self.c_edit.text().strip(),
+            ))
+            if not any_text:
+                return
+            self._showing_result = False
+
         filled = self._filled_count()
 
         if filled == 2:
             self.action_button.setEnabled(True)
             self.action_button.setText("Calculate")
-            self.status_label.setText("Leave the field empty for the value you want to compute (a, b, or c).")
+            self.status_label.setText(self._sentence_wrap(
+                "Leave the field empty for the value you want to compute (a, b, or c)."
+            ))
             return
 
         if filled == 3:
             self.action_button.setEnabled(True)
             self.action_button.setText("Verify")
-            self.status_label.setText(
-                "Click 'Verify' to check whether the triangle is right-angled."
+            self.status_label.setText(self._sentence_wrap(
+                "Click 'Verify' to check whether the triangle is right-angled. "
                 "Input will be sorted: largest will be treated as hypotenuse."
-            )
+            ))
             return
 
         self.action_button.setEnabled(False)
         self.action_button.setText("—")
-        self.status_label.setText("Enter two values to compute or three to verify")
+        self.status_label.setText(self._sentence_wrap("Enter two values to compute or three to verify"))
 
     def _format_abc(self, a: float, b: float, c: float) -> str:
-        """Human-readable values for status line."""
-        return f"a={a:g}, b={b:g}, c={c:g}"
+        """Human-readable values line."""
+        return f"a = {a:g}, b = {b:g}, c = {c:g}"
 
-    def _status_with_values(self, result) -> str:
+    def _sentence_wrap(self, text: str) -> str:
         """
-        Build a readable status message:
-        - keep core message
-        - append computed/verified values when available
+        Make the status output more readable by putting each sentence on a new line.
+
+        We split only when a sentence-ending punctuation is followed by whitespace:
+            '.', '!' or '?' + whitespace -> newline
+
+        This avoids breaking:
+        - decimal numbers: 3.14 (no whitespace after '.')
+        - scientific notation: 1e-3
+        - version-like tokens: v1.2.3 (no whitespace)
         """
-        if result.a is None or result.b is None or result.c is None:
-            return result.message
+        text = (text or "").strip()
+        if not text:
+            return ""
 
-        values = self._format_abc(result.a, result.b, result.c)
-        # Detect which field user left empty to infer what was computed (UI-side explanation)
-        a_filled = bool(self.a_edit.text().strip())
-        b_filled = bool(self.b_edit.text().strip())
-        c_filled = bool(self.c_edit.text().strip())
+        # Replace ". " / "! " / "? " (and multiple spaces) with ".\n" etc.
+        return re.sub(r'([.!?])\s+', r'\1\n', text)
 
-        if sum([a_filled, b_filled, c_filled]) == 2:
-            if not c_filled:
-                return f"{result.message}. Hypotenuse: c={result.c:g}. ({values})"
-            if not a_filled:
-                return f"{result.message}. Leg: a={result.a:g}. ({values})"
-            if not b_filled:
-                return f"{result.message}. Leg: b={result.b:g}. ({values})"
+    def _clear_inputs(self) -> None:
+        """Clear input fields after an action click, without overwriting the result message."""
+        self.a_edit.blockSignals(True)
+        self.b_edit.blockSignals(True)
+        self.c_edit.blockSignals(True)
 
-        # Verify mode (3 filled)
-        return f"{result.message}. ({values})"
+        self.a_edit.clear()
+        self.b_edit.clear()
+        self.c_edit.clear()
+
+        self.a_edit.blockSignals(False)
+        self.b_edit.blockSignals(False)
+        self.c_edit.blockSignals(False)
+
+        # Reset the button state, but DO NOT touch status_label here.
+        self.action_button.setEnabled(False)
+        self.action_button.setText("—")
 
     def on_action_clicked(self):
         """
         Read inputs -> call core -> show results.
 
-        Important:
-        - We pass raw strings to `core.proceed_data`, because the core layer is responsible
-          for parsing/validation and returns a UI-friendly message on any error.
-        - We only draw numeric values on the canvas when the result is valid and complete.
+        - Status shows ONLY core message, formatted into sentences-per-line.
+        - Canvas displays exactly the values returned by core.
+        - Inputs are cleared after the action.
         """
         a_txt = self._normalized_text(self.a_edit.text())
         b_txt = self._normalized_text(self.b_edit.text())
@@ -279,14 +352,17 @@ class MainWindow(QWidget):
 
         result = core.proceed_data({"a": a_txt, "b": b_txt, "c": c_txt})
 
-        # Status: message + readable values (when available)
-        self.status_label.setText(self._status_with_values(result))
+        # Lock status to keep result visible
+        self._showing_result = True
 
-        # Canvas must display exactly what core returned
+        self.status_label.setText(self._sentence_wrap(result.message))
+
         if result.is_valid and result.a is not None and result.b is not None and result.c is not None:
             self.canvas.show_result(result.a, result.b, result.c)
         else:
             self.canvas.show_placeholder()
+
+        self._clear_inputs()
 
 
 def create_window():
