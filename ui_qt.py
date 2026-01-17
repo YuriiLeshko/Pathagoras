@@ -81,7 +81,13 @@ class TriangleCanvas(QFrame):
         self.update()
 
     def _draw_grid(self, painter: QPainter, origin: tuple[int, int]):
-        """Draw a grid aligned to the triangle right-angle point (origin)."""
+        """
+        Draw a background grid aligned to the triangle right angle.
+
+        The grid is not anchored to (0, 0). Instead, its major/minor lines
+        pass through `origin` (the right-angle point), so the grid axes are
+        visually co-linear with the legs (catheti).
+        """
         if not self.grid_enabled:
             return
 
@@ -146,7 +152,11 @@ class TriangleCanvas(QFrame):
 
     def _compute_triangle_points(self, margin: int, base_y: int):
         """
-        Compute triangle points for proportional right-triangle drawing.
+        Compute points for a proportional right-triangle drawing.
+
+        Here `result_a` and `result_b` are treated as real-world leg lengths.
+        We compute a pixel `scale` so that both legs fit into the drawable area,
+        then convert lengths into pixels: pixels = length * scale.
 
         Returns
         -------
@@ -174,6 +184,23 @@ class TriangleCanvas(QFrame):
         return point_c, point_a, point_b, scale
 
     def paintEvent(self, event):
+        """
+        Render the canvas.
+
+        Rendering flow (high-level)
+        ---------------------------
+        1) Setup painter, colors, font metrics.
+        2) Compute `base_y` (lift the baseline a bit so the "b = ..." label fits below).
+        3) Choose triangle geometry:
+           - draw proportional right triangle only when we have a valid RIGHT result,
+           - otherwise draw a placeholder (isosceles) triangle.
+        4) Draw the grid aligned to the right-angle point (point_c).
+        5) Draw triangle edges and the right-angle marker (marker size is constrained).
+        6) Draw labels:
+           - b: centered under the base line,
+           - c: near hypotenuse midpoint (anchored to avoid overlap),
+           - a: vertical along the left leg with ellipsis for long values.
+        """
         super().paintEvent(event)
 
         painter = QPainter(self)
@@ -545,7 +572,8 @@ class MainWindow(QWidget):
         - Status shows ONLY core message, formatted into sentences-per-line.
         - Canvas displays exactly the values returned by core.
         - Inputs are cleared after the action.
-        - Computed output field is shown only in CALCULATE mode (2 inputs).
+        - Computed output field is shown only in CALCULATE mode (2 inputs),
+          and the missing side is inferred by which input field was empty.
         """
         # Detect mode BEFORE clearing inputs
         a_raw = self.a_edit.text().strip()
