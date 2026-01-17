@@ -21,6 +21,12 @@ On click:
 - if result is valid and all sides exist -> draws numeric values on the canvas,
   otherwise shows placeholder.
 
+Computed output field
+---------------------
+- Shown only after a successful CALCULATE (exactly 2 filled fields).
+- Shows only the computed (missing) side: a or b or c.
+- Hidden for VERIFY mode and for any invalid result.
+
 Notes on style
 --------------
 - Existing code comments are preserved.
@@ -51,7 +57,6 @@ class TriangleCanvas(QFrame):
         self.setMinimumHeight(260)
         self.setFrameShape(QFrame.StyledPanel)
 
-        # If later you want to draw a computed triangle, store values here.
         self.has_result = False
         self.result_a = None
         self.result_b = None
@@ -139,7 +144,7 @@ class TriangleCanvas(QFrame):
             y += step
             i += 1
 
-    def _compute_triangle_points(self, margin: int,  base_y: int):
+    def _compute_triangle_points(self, margin: int, base_y: int):
         """
         Compute triangle points for proportional right-triangle drawing.
 
@@ -150,7 +155,7 @@ class TriangleCanvas(QFrame):
         - point_a: bottom-right (along b)
         - point_b: top-left (along a)
         """
-        w, h = self.width(), self.height()
+        w, _h = self.width(), self.height()
         a_val = float(self.result_a) if self.result_a is not None else 1.0
         b_val = float(self.result_b) if self.result_b is not None else 1.0
 
@@ -185,10 +190,6 @@ class TriangleCanvas(QFrame):
         painter.setPen(text_color)
         fm = painter.fontMetrics()
 
-        gap = max(6, self.grid_step_px // 2)  # e.g. 10px for step=20
-        needed = fm.height() + gap  # space to place "b = ..." below the base line
-        base_y = h - margin - min(needed, margin)
-
         def clamp(val: int, lo: int, hi: int) -> int:
             return max(lo, min(val, hi))
 
@@ -209,13 +210,18 @@ class TriangleCanvas(QFrame):
             elided = fm.elidedText(text, Qt.ElideRight, max_width)
             painter.drawText(x, y, elided)
 
+        # Lift the base
+        gap = max(6, self.grid_step_px // 2)
+        needed = fm.height() + gap
+        base_y = h - margin - min(needed, margin)
+
         # Decide whether we can draw a proportional right triangle
         can_draw_proportional = (
-                self.has_result
-                and self.is_right
-                and self.result_a is not None
-                and self.result_b is not None
-                and self.result_c is not None
+            self.has_result
+            and self.is_right
+            and self.result_a is not None
+            and self.result_b is not None
+            and self.result_c is not None
         )
 
         if can_draw_proportional:
@@ -228,10 +234,9 @@ class TriangleCanvas(QFrame):
             point_b = (margin, margin)
 
         # Background grid aligned to the triangle right angle (point_c)
-        # NOTE: _draw_grid must accept origin=(x,y)
         self._draw_grid(painter, origin=point_c)
 
-        # Triangle edges (thicker)
+        # Triangle edges
         tri_pen = QPen(text_color, 2)
         painter.setPen(tri_pen)
 
@@ -245,10 +250,8 @@ class TriangleCanvas(QFrame):
         leg_h = abs(point_c[1] - point_b[1])  # a in pixels (int)
         min_leg = min(leg_w, leg_h)
 
-        # ra should not exceed 1/4 of the smallest leg
+        # Marker must not exceed 1/4 of the smallest leg
         ra_cap = max(3, min_leg // 4)
-
-        # base suggestion: 12% of min leg, but capped by ra_cap and by a reasonable max
         scaled = int(0.12 * min_leg)
         ra = max(3, min(18, scaled, ra_cap))
 
@@ -272,13 +275,8 @@ class TriangleCanvas(QFrame):
         # --- b label: MUST be BELOW the b-line ---
         b_text = fmt("b", self.result_b)
 
-        # Put it under the line by at least half a grid step, and account for BASELINE:
-        # top_of_text = baseline - ascent  -> ensure top is below line + gap
-        gap = max(6, self.grid_step_px // 2)
         line_y = mid_ca[1]
         b_y = line_y + gap + fm.ascent()
-
-        # Keep baseline inside widget bounds
         b_y = clamp(b_y, margin + fm.ascent(), h - margin // 2)
 
         b_max_left = mid_ca[0] - 5
@@ -325,11 +323,37 @@ class MainWindow(QWidget):
         * otherwise       -> disabled, "—"
     - Call the core orchestration function `core.proceed_data`.
     - Display the returned status message and (when possible) numeric results on the canvas.
+    - Show one computed output field only in CALCULATE mode.
     """
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pythagoras Tool")
         self.resize(720, 520)
+
+        # Fonts
+        self.output_font = QFont("Monospace")
+        self.output_font.setStyleHint(QFont.Monospace)
+
+        # Styles (neutral, theme-independent)
+        self.output_field_style = """
+        QLineEdit {
+            background-color: #3a3a3a;
+            color: #ffffff;
+            border: 1px solid #6a6a6a;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-weight: 600;
+        }
+        QLineEdit:focus {
+            border: 1px solid #8fb2ff;
+        }
+        """
+
+        self.output_label_style = """
+        QLabel {
+            font-weight: 600;
+        }
+        """
 
         layout = QVBoxLayout(self)
 
@@ -369,6 +393,24 @@ class MainWindow(QWidget):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
+        # --- Computed output field (shown only after a successful CALCULATE) ---
+        output_row = QHBoxLayout()
+        output_row.setSpacing(8)
+
+        self.computed_out_label = QLabel("—")
+        self.computed_out_label.setStyleSheet(self.output_label_style)
+        output_row.addWidget(self.computed_out_label)
+
+        self.computed_out = self._create_output_field()
+        output_row.addWidget(self.computed_out)
+
+        output_row.setStretchFactor(self.computed_out, 1)
+
+        self.output_container = QWidget()
+        self.output_container.setLayout(output_row)
+        self.output_container.setVisible(False)
+        layout.addWidget(self.output_container)
+
         # Action button
         self.action_button = QPushButton("—")
         self.action_button.setEnabled(False)
@@ -380,6 +422,15 @@ class MainWindow(QWidget):
         # When True, input changes must NOT overwrite the last result message.
         self._showing_result = False
 
+    def _create_output_field(self) -> QLineEdit:
+        """Create a read-only output field for the computed value."""
+        field = QLineEdit()
+        field.setReadOnly(True)
+        field.setFont(self.output_font)
+        field.setStyleSheet(self.output_field_style)
+        field.setFocusPolicy(Qt.StrongFocus)  # allow selection + Ctrl+C
+        field.setMinimumWidth(140)
+        return field
 
     def _normalized_text(self, txt: str) -> str:
         """
@@ -397,6 +448,53 @@ class MainWindow(QWidget):
             self.c_edit.text().strip(),
         )
         return sum(bool(v) for v in values)
+
+    def _sentence_wrap(self, text: str) -> str:
+        """
+        Make the status output more readable by putting each sentence on a new line.
+
+        We split only when a sentence-ending punctuation is followed by whitespace:
+            '.', '!' or '?' + whitespace -> newline
+
+        This avoids breaking:
+        - decimal numbers: 3.14 (no whitespace after '.')
+        - scientific notation: 1e-3
+        - version-like tokens: v1.2.3 (no whitespace)
+        """
+        text = (text or "").strip()
+        if not text:
+            return ""
+        return re.sub(r'([.!?])\s+', r'\1\n', text)
+
+    def _clear_inputs(self) -> None:
+        """Clear input fields after an action click, without overwriting the result message."""
+        self.a_edit.blockSignals(True)
+        self.b_edit.blockSignals(True)
+        self.c_edit.blockSignals(True)
+
+        self.a_edit.clear()
+        self.b_edit.clear()
+        self.c_edit.clear()
+
+        self.a_edit.blockSignals(False)
+        self.b_edit.blockSignals(False)
+        self.c_edit.blockSignals(False)
+
+        # Reset the button state, but DO NOT touch status_label here.
+        self.action_button.setEnabled(False)
+        self.action_button.setText("—")
+
+    def _hide_outputs(self) -> None:
+        """Hide computed output container and clear its content."""
+        self.output_container.setVisible(False)
+        self.computed_out_label.setText("—")
+        self.computed_out.clear()
+
+    def _show_computed_output(self, key: str, value: float) -> None:
+        """Show only the computed (missing) field in CALCULATE mode."""
+        self.output_container.setVisible(True)
+        self.computed_out_label.setText(f"{key}:")
+        self.computed_out.setText(f"{value:g}")
 
     def on_input_changed(self):
         """
@@ -440,47 +538,6 @@ class MainWindow(QWidget):
         self.action_button.setText("—")
         self.status_label.setText(self._sentence_wrap("Enter two values to compute or three to verify"))
 
-    def _format_abc(self, a: float, b: float, c: float) -> str:
-        """Human-readable values line."""
-        return f"a = {a:g}, b = {b:g}, c = {c:g}"
-
-    def _sentence_wrap(self, text: str) -> str:
-        """
-        Make the status output more readable by putting each sentence on a new line.
-
-        We split only when a sentence-ending punctuation is followed by whitespace:
-            '.', '!' or '?' + whitespace -> newline
-
-        This avoids breaking:
-        - decimal numbers: 3.14 (no whitespace after '.')
-        - scientific notation: 1e-3
-        - version-like tokens: v1.2.3 (no whitespace)
-        """
-        text = (text or "").strip()
-        if not text:
-            return ""
-
-        # Replace ". " / "! " / "? " (and multiple spaces) with ".\n" etc.
-        return re.sub(r'([.!?])\s+', r'\1\n', text)
-
-    def _clear_inputs(self) -> None:
-        """Clear input fields after an action click, without overwriting the result message."""
-        self.a_edit.blockSignals(True)
-        self.b_edit.blockSignals(True)
-        self.c_edit.blockSignals(True)
-
-        self.a_edit.clear()
-        self.b_edit.clear()
-        self.c_edit.clear()
-
-        self.a_edit.blockSignals(False)
-        self.b_edit.blockSignals(False)
-        self.c_edit.blockSignals(False)
-
-        # Reset the button state, but DO NOT touch status_label here.
-        self.action_button.setEnabled(False)
-        self.action_button.setText("—")
-
     def on_action_clicked(self):
         """
         Read inputs -> call core -> show results.
@@ -488,24 +545,44 @@ class MainWindow(QWidget):
         - Status shows ONLY core message, formatted into sentences-per-line.
         - Canvas displays exactly the values returned by core.
         - Inputs are cleared after the action.
+        - Computed output field is shown only in CALCULATE mode (2 inputs).
         """
-        a_txt = self._normalized_text(self.a_edit.text())
-        b_txt = self._normalized_text(self.b_edit.text())
-        c_txt = self._normalized_text(self.c_edit.text())
+        # Detect mode BEFORE clearing inputs
+        a_raw = self.a_edit.text().strip()
+        b_raw = self.b_edit.text().strip()
+        c_raw = self.c_edit.text().strip()
+        filled = sum(bool(v) for v in (a_raw, b_raw, c_raw))
+
+        a_txt = self._normalized_text(a_raw)
+        b_txt = self._normalized_text(b_raw)
+        c_txt = self._normalized_text(c_raw)
 
         result = core.proceed_data({"a": a_txt, "b": b_txt, "c": c_txt})
 
         # Lock status to keep result visible
         self._showing_result = True
-
         self.status_label.setText(self._sentence_wrap(result.message))
 
+        # Canvas must display exactly what core returned
         if result.is_valid and result.a is not None and result.b is not None and result.c is not None:
             self.canvas.show_result(result.a, result.b, result.c, is_right=result.is_right)
-
         else:
             self.canvas.show_placeholder()
 
+        # Show computed output only in CALCULATE mode (exactly 2 filled), never in VERIFY mode
+        if filled == 2 and result.is_valid:
+            if not a_raw and result.a is not None:
+                self._show_computed_output("a", result.a)
+            elif not b_raw and result.b is not None:
+                self._show_computed_output("b", result.b)
+            elif not c_raw and result.c is not None:
+                self._show_computed_output("c", result.c)
+            else:
+                self._hide_outputs()
+        else:
+            self._hide_outputs()
+
+        # Clear inputs after click
         self._clear_inputs()
 
 
