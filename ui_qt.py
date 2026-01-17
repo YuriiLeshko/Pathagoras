@@ -56,17 +56,117 @@ class TriangleCanvas(QFrame):
         self.result_a = None
         self.result_b = None
         self.result_c = None
+        self.is_right = False
+
+        self.grid_enabled = True
+        self.grid_step_px = 20  # distance between minor grid lines in pixels
+        self.grid_major_every = 5  # every N minor lines draw a thicker major line
 
     def show_placeholder(self):
         """Switch to placeholder mode (no numeric values are displayed)."""
         self.has_result = False
+        self.is_right = False
         self.update()
 
-    def show_result(self, a: float, b: float, c: float):
+    def show_result(self, a: float, b: float, c: float, is_right: bool):
         """Switch to result mode and display numeric values for a, b, c."""
         self.has_result = True
         self.result_a, self.result_b, self.result_c = a, b, c
+        self.is_right = is_right
         self.update()
+
+    def _draw_grid(self, painter: QPainter, origin: tuple[int, int]):
+        """Draw a grid aligned to the triangle right-angle point (origin)."""
+        if not self.grid_enabled:
+            return
+
+        palette = self.palette()
+        fg = palette.color(self.foregroundRole())
+
+        # Minor grid (more transparent)
+        minor = QPen(fg, 1)
+        minor_color = minor.color()
+        minor_color.setAlpha(35)
+        minor.setColor(minor_color)
+
+        # Major grid (less transparent)
+        major = QPen(fg, 1)
+        major_color = major.color()
+        major_color.setAlpha(70)
+        major.setColor(major_color)
+
+        w, h = self.width(), self.height()
+        step = max(8, int(self.grid_step_px))
+        major_every = max(2, int(self.grid_major_every))
+
+        origin_x, origin_y = origin
+
+        # --- Vertical lines: x = origin_x + k*step ---
+        # Draw to the right
+        x = origin_x
+        i = 0
+        while x <= w:
+            painter.setPen(major if (i % major_every == 0) else minor)
+            painter.drawLine(x, 0, x, h)
+            x += step
+            i += 1
+
+        # Draw to the left
+        x = origin_x - step
+        i = 1
+        while x >= 0:
+            painter.setPen(major if (i % major_every == 0) else minor)
+            painter.drawLine(x, 0, x, h)
+            x -= step
+            i += 1
+
+        # --- Horizontal lines: y = origin_y - k*step (up) and +k*step (down) ---
+        # Draw upward
+        y = origin_y
+        i = 0
+        while y >= 0:
+            painter.setPen(major if (i % major_every == 0) else minor)
+            painter.drawLine(0, y, w, y)
+            y -= step
+            i += 1
+
+        # Draw downward
+        y = origin_y + step
+        i = 1
+        while y <= h:
+            painter.setPen(major if (i % major_every == 0) else minor)
+            painter.drawLine(0, y, w, y)
+            y += step
+            i += 1
+
+    def _compute_triangle_points(self, margin: int,  base_y: int):
+        """
+        Compute triangle points for proportional right-triangle drawing.
+
+        Returns
+        -------
+        (point_c, point_a, point_b, scale) where:
+        - point_c: right angle (bottom-left)
+        - point_a: bottom-right (along b)
+        - point_b: top-left (along a)
+        """
+        w, h = self.width(), self.height()
+        a_val = float(self.result_a) if self.result_a is not None else 1.0
+        b_val = float(self.result_b) if self.result_b is not None else 1.0
+
+        avail_w = max(1, w - 2 * margin)
+        avail_h = max(1, base_y - margin)
+
+        scale = min(avail_w / b_val, avail_h / a_val)
+
+        x0 = margin
+        y0 = base_y
+
+        point_c = (x0, y0)
+        point_a = (x0 + int(b_val * scale), y0)
+        point_b = (x0, y0 - int(a_val * scale))
+
+        return point_c, point_a, point_b, scale
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -77,33 +177,17 @@ class TriangleCanvas(QFrame):
         palette = self.palette()
         text_color = palette.color(self.foregroundRole())
 
-        pen = QPen(text_color, 2)
-        painter.setPen(pen)
-
         w, h = self.width(), self.height()
         margin = 40
 
-        # Right angle at bottom-left (C), isosceles legs
-        point_c = (margin, h - margin)           # bottom-left
-        point_a = (w - margin, h - margin)       # bottom-right
-        point_b = (margin, margin)               # top-left
-
-        # Draw triangle edges
-        painter.drawLine(point_c[0], point_c[1], point_a[0], point_a[1])  # base (leg b)
-        painter.drawLine(point_c[0], point_c[1], point_b[0], point_b[1])  # vertical (leg a)
-        painter.drawLine(point_b[0], point_b[1], point_a[0], point_a[1])  # hypotenuse (c)
-
-        # Draw right-angle marker at C
-        ra = 18
-        painter.drawLine(point_c[0], point_c[1], point_c[0] + ra, point_c[1])
-        painter.drawLine(point_c[0], point_c[1], point_c[0], point_c[1] - ra)
-        painter.drawLine(point_c[0] + ra, point_c[1], point_c[0] + ra, point_c[1] - ra)
-        painter.drawLine(point_c[0], point_c[1] - ra, point_c[0] + ra, point_c[1] - ra)
-
-        # Labels font
+        # Labels font (used also for metrics like ascent/height)
         painter.setFont(QFont("Arial", 12))
         painter.setPen(text_color)
         fm = painter.fontMetrics()
+
+        gap = max(6, self.grid_step_px // 2)  # e.g. 10px for step=20
+        needed = fm.height() + gap  # space to place "b = ..." below the base line
+        base_y = h - margin - min(needed, margin)
 
         def clamp(val: int, lo: int, hi: int) -> int:
             return max(lo, min(val, hi))
@@ -112,30 +196,90 @@ class TriangleCanvas(QFrame):
             """Build label like 'b = 12.34' or just 'b' if value missing."""
             if not self.has_result or value is None:
                 return name
-            # Use a compact format; still may be long -> will be elided later
             return f"{name} = {value:g}"
 
         def draw_centered_elided_text(x_center: int, y: int, text: str, max_width: int):
-            """
-            Draw elided text (with ellipsis if needed) centered around x_center.
-            """
+            """Draw elided text centered around x_center."""
             elided = fm.elidedText(text, Qt.ElideRight, max_width)
             text_w = fm.horizontalAdvance(elided)
             painter.drawText(x_center - text_w // 2, y, elided)
 
         def draw_elided_text(x: int, y: int, text: str, max_width: int):
-            """Draw text clipped to max_width using ellipsis if needed."""
+            """Draw elided text anchored at x,y (baseline)."""
             elided = fm.elidedText(text, Qt.ElideRight, max_width)
             painter.drawText(x, y, elided)
+
+        # Decide whether we can draw a proportional right triangle
+        can_draw_proportional = (
+                self.has_result
+                and self.is_right
+                and self.result_a is not None
+                and self.result_b is not None
+                and self.result_c is not None
+        )
+
+        if can_draw_proportional:
+            # Proportional right triangle using computed legs a,b
+            point_c, point_a, point_b, _scale = self._compute_triangle_points(margin, base_y)
+        else:
+            # Placeholder: Right angle at bottom-left (C), isosceles legs
+            point_c = (margin, base_y)
+            point_a = (w - margin, base_y)
+            point_b = (margin, margin)
+
+        # Background grid aligned to the triangle right angle (point_c)
+        # NOTE: _draw_grid must accept origin=(x,y)
+        self._draw_grid(painter, origin=point_c)
+
+        # Triangle edges (thicker)
+        tri_pen = QPen(text_color, 2)
+        painter.setPen(tri_pen)
+
+        # Draw triangle edges
+        painter.drawLine(point_c[0], point_c[1], point_a[0], point_a[1])  # base (leg b)
+        painter.drawLine(point_c[0], point_c[1], point_b[0], point_b[1])  # vertical (leg a)
+        painter.drawLine(point_b[0], point_b[1], point_a[0], point_a[1])  # hypotenuse (c)
+
+        # Right-angle marker at C, scaled to triangle size
+        leg_w = abs(point_a[0] - point_c[0])  # b in pixels (int)
+        leg_h = abs(point_c[1] - point_b[1])  # a in pixels (int)
+        min_leg = min(leg_w, leg_h)
+
+        # ra should not exceed 1/4 of the smallest leg
+        ra_cap = max(3, min_leg // 4)
+
+        # base suggestion: 12% of min leg, but capped by ra_cap and by a reasonable max
+        scaled = int(0.12 * min_leg)
+        ra = max(3, min(18, scaled, ra_cap))
+
+        ra_pen = QPen(text_color, 3)
+        painter.setPen(ra_pen)
+
+        painter.drawLine(point_c[0], point_c[1], point_c[0] + ra, point_c[1])
+        painter.drawLine(point_c[0], point_c[1], point_c[0], point_c[1] - ra)
+        painter.drawLine(point_c[0] + ra, point_c[1], point_c[0] + ra, point_c[1] - ra)
+        painter.drawLine(point_c[0], point_c[1] - ra, point_c[0] + ra, point_c[1] - ra)
+
+        # Labels font
+        painter.setFont(QFont("Arial", 12))
+        painter.setPen(text_color)
 
         # Midpoints for labels
         mid_ca = ((point_c[0] + point_a[0]) // 2, (point_c[1] + point_a[1]) // 2)  # bottom leg
         mid_cb = ((point_c[0] + point_b[0]) // 2, (point_c[1] + point_b[1]) // 2)  # left leg
         mid_ba = ((point_b[0] + point_a[0]) // 2, (point_b[1] + point_a[1]) // 2)  # hypotenuse
 
-        # b: center the TEXT around the midpoint of the bottom leg
+        # --- b label: MUST be BELOW the b-line ---
         b_text = fmt("b", self.result_b)
-        b_y = clamp(mid_ca[1] - 10, margin, h - 5)  # keep inside widget
+
+        # Put it under the line by at least half a grid step, and account for BASELINE:
+        # top_of_text = baseline - ascent  -> ensure top is below line + gap
+        gap = max(6, self.grid_step_px // 2)
+        line_y = mid_ca[1]
+        b_y = line_y + gap + fm.ascent()
+
+        # Keep baseline inside widget bounds
+        b_y = clamp(b_y, margin + fm.ascent(), h - margin // 2)
 
         b_max_left = mid_ca[0] - 5
         b_max_right = w - 5 - mid_ca[0]
@@ -143,13 +287,13 @@ class TriangleCanvas(QFrame):
 
         draw_centered_elided_text(mid_ca[0], b_y, b_text, max_width=b_max_w)
 
-        # c: use the previous "anchored near the midpoint" approach to avoid overlapping the slanted side
+        # --- c label: anchored near midpoint (do not center) to avoid overlapping the slanted side ---
         c_text = fmt("c", self.result_c)
         c_x = clamp(mid_ba[0] + 10, 5, w - margin)
         c_y = clamp(mid_ba[1] - 10, margin, h - 5)
         draw_elided_text(c_x, c_y, c_text, max_width=w - c_x - 5)
 
-        # a: vertical text along the left leg (better for long values), centered
+        # --- a label: vertical text along the left leg (better for long values), centered ---
         a_text = fmt("a", self.result_a)
 
         painter.save()
@@ -166,7 +310,6 @@ class TriangleCanvas(QFrame):
         # Center the vertical text around the rotation origin
         painter.drawText(-a_text_w // 2, 0, elided_a)
         painter.restore()
-
 
 
 class MainWindow(QWidget):
@@ -358,7 +501,8 @@ class MainWindow(QWidget):
         self.status_label.setText(self._sentence_wrap(result.message))
 
         if result.is_valid and result.a is not None and result.b is not None and result.c is not None:
-            self.canvas.show_result(result.a, result.b, result.c)
+            self.canvas.show_result(result.a, result.b, result.c, is_right=result.is_right)
+
         else:
             self.canvas.show_placeholder()
 
