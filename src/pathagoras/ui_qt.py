@@ -44,7 +44,7 @@ from PySide6.QtGui import QPainter, QPen, QFont
 import sys
 import re
 
-import core
+from pathagoras import core
 
 
 class TriangleCanvas(QFrame):

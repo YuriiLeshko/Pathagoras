@@ -6,7 +6,7 @@ This module is responsible only for starting the Qt GUI.
 All UI logic lives in ui_qt.py.
 """
 
-from ui_qt import create_window
+from pathagoras.ui_qt import create_window
 
 
 def main() -> None:
@@ -14,5 +14,5 @@ def main() -> None:
     create_window()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

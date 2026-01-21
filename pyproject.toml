@@ -1,0 +1,25 @@
+[project]
+name = "pathagoras"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["PySide6"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-qt", "pytest-cov"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=pathagoras.core --cov-report=term-missing"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+pathagoras = "pathagoras.main:main"

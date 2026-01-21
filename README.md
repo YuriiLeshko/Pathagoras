@@ -24,28 +24,60 @@ The application allows users to compute missing side lengths, verify whether giv
 
 ---
 ## Requirements
-- Python 3.10+
+
+- Python **3.10+**
 
 ---
 
-## Setup (2 commands)
+## Setup
 
-### 1. Create and activate virtual environment
-
-```bash
-python -m venv venv
-source venv/bin/activate      # Linux / macOS
-# OR
-.\venv\Scripts\Activate.ps1    # Windows (PowerShell)
-```
-
-### 2. Install dependencies
+### 1. Create and activate a virtual environment
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate      # Linux / macOS
+# OR (Windows PowerShell)
+.\.venv\Scripts\Activate.ps1
 ```
-### 3. Run
 
+### 2. Install the project with development dependencies
 ```bash
-python main.py
+pip install -e ".[dev]"
 ```
+
+This installs:
+
+runtime dependencies (PySide6),
+
+development and test dependencies (pytest, pytest-qt, pytest-cov).
+
+### 3. Run the application
+```bash
+pathagoras
+```
+
+### 4. Run tests with coverage
+- Core logic tests (business logic only)
+```bash
+
+pytest -q --cov=pathagoras.core --cov-report=term-missing
+```
+This command:
+
+runs all core-related tests,
+
+shows coverage percentage,
+
+lists uncovered lines directly in the terminal.
+
+- Full test suite (core + UI)
+```bash
+pytest -q --cov=pathagoras --cov-report=term-missing
+```
+---
+## Notes for reviewers
+All computational logic is isolated in pathagoras.core and fully unit-tested.
+
+GUI logic is separated in pathagoras.ui_qt and tested independently using pytest-qt.
+
+Coverage output is displayed directly in the terminal for quick verification.
